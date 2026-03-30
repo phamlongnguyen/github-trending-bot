@@ -1,8 +1,8 @@
-name: AI Trend Bot
+name: Tech Morning Brief Bot
 
 on:
   schedule:
-     - cron: "05 8 * * *" # 14:55 VN (07:55 UTC)
+    - cron: "0 2 * * *"  # 09:00 VN (UTC+7)
   workflow_dispatch:
 
 jobs:
@@ -14,12 +14,21 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
       - run: npm install
+
       - run: node index.js
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+
+      - name: Commit sent.json
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@example.com"
+          git add sent.json
+          git commit -m "chore: update sent repos" || echo "no changes"
+          git push
