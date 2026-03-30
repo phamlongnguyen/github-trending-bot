@@ -5,31 +5,28 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
+const headers = { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` };
 
-// 🔹 GitHub headers
-const headers = {
-  Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-};
+// 🔹 1. Lấy Repo đang "Hot" trong 7 ngày qua
+async function getTrendingRepos() {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const dateStr = sevenDaysAgo.toISOString().split('T')[0];
 
-// 🔹 1. Lấy repo (có keyword nâng cấp)
-async function getRepos() {
-  const res = await axios.get(
-    "https://api.github.com/search/repositories",
-    {
-      params: {
-        q: "ai OR gpt OR claude OR llm OR agent created:>2024-01-01 stars:>50",
-        sort: "stars",
-        order: "desc",
-        per_page: 10,
-      },
-      headers,
-    }
-  );
-
+  const res = await axios.get("https://api.github.com/search/repositories", {
+    params: {
+      // Tìm các repo AI/LLM tạo trong 7 ngày qua, có từ 50 star trở lên
+      q: `(ai OR llm OR agent OR "claude code" OR "gemini") created:>${dateStr} stars:>50`,
+      sort: "stars",
+      order: "desc",
+      per_page: 8,
+    },
+    headers,
+  });
   return res.data.items;
 }
 
-// 🔹 2. AI helper (Groq)
+// 🔹 2. AI Helper với System Prompt nghiêm ngặt
 async function askAI(prompt) {
   try {
     const res = await axios.post(
@@ -38,9 +35,10 @@ async function askAI(prompt) {
         model: "llama-3.3-70b-versatile",
         messages: [
           {
-            role: "user",
-            content: prompt,
+            role: "system",
+            content: "Bạn là chuyên gia phân tích công nghệ. Chỉ dựa trên dữ liệu được cung cấp, không tự chế tên dự án hay số liệu. Trả lời bằng tiếng Việt, ngắn gọn, súc tích."
           },
+          { role: "user", content: prompt },
         ],
       },
       {
@@ -50,81 +48,66 @@ async function askAI(prompt) {
         },
       }
     );
-
     return res.data.choices[0].message.content;
   } catch (err) {
-    console.error("AI ERROR:", err.response?.data || err.message);
-    return "⚠️ AI error";
+    return "⚠️ Không thể phân tích xu hướng lúc này.";
   }
 }
 
-// 🔹 3. Build message
+// 🔹 3. Xây dựng bản tin
 async function buildMessage() {
-  const repos = await getRepos();
+  const repos = await getTrendingRepos();
+  if (repos.length === 0) return "Chưa tìm thấy trend mới nào trong 7 ngày qua.";
 
-  const filtered = repos.filter((r) => r.description);
+  // Chuẩn bị dữ liệu sạch cho AI
+  const repoDataForAI = repos.map(r => 
+    `- ${r.full_name}: ${r.description} (${r.stargazers_count} stars)`
+  ).join("\n");
 
-  const repoText = filtered
-    .map(
-      (r) =>
-        `${r.full_name} (${r.stargazers_count}⭐): ${r.description}`
-    )
-    .join("\n");
+  // Gọi AI xử lý các phần
+  const [highlight, insight, deepDive] = await Promise.all([
+    askAI(`Tóm tắt 1 xu hướng công nghệ nổi bật nhất từ danh sách này (tối đa 2 câu):\n${repoDataForAI}`),
+    askAI(`Viết 1 lời khuyên hoặc insight ngắn cho lập trình viên từ các repo này (1 câu):\n${repoDataForAI}`),
+    askAI(`Phân loại các repo này thành các nhóm (ví dụ: AI Agents, Developer Tools...). Trả lời dạng bullet point:\n${repoDataForAI}`)
+  ]);
 
-  // 🔥 TIÊU ĐIỂM
-  const highlight = await askAI(
-    `Tóm tắt xu hướng công nghệ từ các repo sau (2 câu):\n${repoText}`
-  );
-
-  // 💡 INSIGHT
-  const insight = await askAI(
-    `Viết 1 insight ngắn cho dev (2 câu max):\n${repoText}`
-  );
-
-  // 📚 DEEP DIVE
-  const deepDive = await askAI(
-    `Phân loại repo thành nhóm (AI Agents, Tools, UI...). Format bullet:\n${repoText}`
-  );
-
-  // 🚀 TOP repos
-  let top = "";
-  for (const r of filtered.slice(0, 5)) {
-    const sum = await askAI(
-      `Tóm tắt repo này trong 1 câu:\n${r.full_name} - ${r.description}`
-    );
-
-    top += `• ${r.full_name} ⭐ ${r.stargazers_count}\n  ${sum}\n\n`;
+  // Xây dựng danh sách Top Repos (giữ nguyên số liệu thực tế từ GitHub)
+  let topReposList = "";
+  for (const r of repos.slice(0, 5)) {
+    topReposList += `• <a href="${r.html_url}">${r.full_name}</a> ⭐ ${r.stargazers_count}\n  └ ${r.description || "No description"}\n\n`;
   }
 
-  return `
-⚡ AI Trend Hunter — Daily Brief
+  const today = new Date().toLocaleDateString('vi-VN');
 
-🔥 TIÊU ĐIỂM
+  return `
+⚡ <b>AI Trend Hunter — Daily Brief (${today})</b>
+
+🔥 <b>TIÊU ĐIỂM</b>
 ${highlight}
 
-🚀 TOP GITHUB TRENDING
-${top}
+🚀 <b>TOP NEW TRENDING (7 DAYS)</b>
+${topReposList}
 
-💡 INSIGHT
-${insight}
+💡 <b>INSIGHT</b>
+<i>${insight}</i>
 
-📚 DEEP DIVE
+📚 <b>PHÂN LOẠI</b>
 ${deepDive}
+
+#AITrend #GitHubTrending #TechUpdate
 `;
 }
 
-// 🔹 4. Run bot (single run)
+// 🔹 4. Run
 async function runBot() {
   try {
-    console.log("🚀 Running bot...");
-
+    console.log("🚀 Đang săn lùng trend mới...");
     const text = await buildMessage();
-
-    await bot.sendMessage(process.env.CHAT_ID, text);
-
-    console.log("✅ Sent to Telegram!");
+    
+    await bot.sendMessage(process.env.CHAT_ID, text, { parse_mode: 'HTML' });
+    console.log("✅ Đã gửi bản tin thực tế lên Telegram!");
   } catch (err) {
-    console.error("❌ ERROR:", err);
+    console.error("❌ ERROR:", err.message);
   }
 }
 
