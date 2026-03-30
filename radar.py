@@ -32,58 +32,73 @@ def send_telegram(text):
     if not res.json().get("ok"):
         print(f"❌ Telegram Error: {res.text}")
 
+def analyze_repo(repo, model_name):
+    prompt = f"""
+    Phân tích chuyên sâu repo GitHub: {repo['full_name']}
+    Mô tả: {repo['description']}
+    Ngôn ngữ: {repo['language']}
+    
+    Trả về Tiếng Việt theo đúng 4 dòng sau:
+    CONG_DUNG: (Giải thích thực tế nó dùng để làm gì)
+    TAI_SAO_HOT: (Lý do đạt {repo['stargazers_count']} stars)
+    STARTUP_IDEA: (Ý tưởng kinh doanh dựa trên công nghệ này)
+    TOM_TAT: (Một câu ngắn gọn)
+    """
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    try:
+        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=25)
+        data = res.json()
+        if "candidates" in data:
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+            return content.replace("<", "&lt;").replace(">", "&gt;")
+        return "⚠️ AI không thể trích xuất dữ liệu."
+    except Exception as e:
+        return f"⚠️ Lỗi kết nối AI: {str(e)}"
+
 def run_radar(label="AUTO"):
-    print(f"🚀 [{label}] Đang quét GitHub AI (>20k Stars)...")
+    # Lấy thời gian hiện tại (Định dạng: Thứ, Ngày/Tháng/Năm Giờ:Phút)
+    # Lưu ý: GitHub Actions dùng giờ UTC, muốn giờ VN thì cộng thêm 7 tiếng
+    now = datetime.utcnow() + timedelta(hours=7)
+    time_str = now.strftime("%d/%m/%Y %H:%M")
+
+    print(f"🚀 [{label}] [{time_str}] Đang quét GitHub AI...")
     model_name = get_model()
     
     url = "https://api.github.com/search/repositories"
-    # QUERY: Lọc cực mạnh > 20.000 stars, liên quan đến AI/Claude và mới cập nhật
-    last_month = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
-    query = f"stars:>20000 pushed:>{last_month} topic:ai"
+    query = "stars:>20000 topic:ai pushed:>2024-01-01"
     
     try:
-        # Lấy 10 repo khủng nhất
         res = requests.get(url, params={"q": query, "sort": "stars", "per_page": 10}, timeout=15).json()
         repos = res.get("items", [])
         
         if not repos:
-            send_telegram(f"<b>[{label}]</b> 😴 Không tìm thấy repo AI nào > 20k stars mới cập nhật.")
+            send_telegram(f"🕒 <code>{time_str}</code>\n<b>[{label}]</b> 😴 Không tìm thấy repo AI mới.")
             return
 
         for i, r in enumerate(repos, 1):
-            # Prompt yêu cầu phân tích sâu hơn
-            prompt = f"""
-            Hãy phân tích repo GitHub này: {r['full_name']}
-            Mô tả gốc: {r['description']}
+            analysis_raw = analyze_repo(r, model_name)
             
-            Yêu cầu trả về bằng Tiếng Việt, định dạng HTML:
-            1. 'Công dụng thực tế': Repo này dùng để làm gì trong thực tế? (Phân tích sâu)
-            2. 'Tại sao hot': Tại sao nó đạt hơn 20k stars?
-            3. 'Startup Idea': Một ý tưởng kinh doanh từ repo này.
-            4. 'Tóm tắt 1 câu': Ngắn gọn nhất có thể.
-            """
-            
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            ai_res = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]}).json()
-            
-            if "candidates" in ai_res:
-                analysis = ai_res["candidates"][0]["content"]["parts"][0]["text"]
-                # Xử lý bảo mật HTML cơ bản
-                analysis = analysis.replace("<br>", "\n").replace("<b>", "<b>").replace("</b>", "</b>")
-            else:
-                analysis = "<i>(AI gặp lỗi khi phân tích sâu repo này)</i>"
+            lines = analysis_raw.split("\n")
+            formatted_analysis = ""
+            for line in lines:
+                line = line.strip()
+                if "CONG_DUNG:" in line: formatted_analysis += f"💡 <b>Công dụng:</b> {line.replace('CONG_DUNG:', '').strip()}\n"
+                elif "TAI_SAO_HOT:" in line: formatted_analysis += f"🔥 <b>Tại sao hot:</b> {line.replace('TAI_SAO_HOT:', '').strip()}\n"
+                elif "STARTUP_IDEA:" in line: formatted_analysis += f"🚀 <b>Startup Idea:</b> {line.replace('STARTUP_IDEA:', '').strip()}\n"
+                elif "TOM_TAT:" in line: formatted_analysis += f"📝 <b>Tóm tắt:</b> {line.replace('TOM_TAT:', '').strip()}\n"
 
-            # Định dạng tin nhắn gửi đi
+            if not formatted_analysis:
+                formatted_analysis = analysis_raw
+
+            # Message định dạng mới có Ngày/Giờ ở đầu
             msg = (
-                f"🏆 <b>TOP AI REPO #{i}</b> 🏷️ <code>{label}</code>\n"
+                f"🕒 <code>{time_str}</code> | #{i} 🏆\n"
+                f"📂 <b>{r['name'].upper()}</b> [<code>{label}</code>]\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🔥 <b>Tên:</b> {r['name'].upper()}\n"
-                f"⭐ <b>Stars:</b> <code>{r['stargazers_count']:,}</code>\n"
-                f"🌐 <b>Ngôn ngữ:</b> {r['language'] or 'N/A'}\n"
+                f"⭐ Stars: <code>{r['stargazers_count']:,}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{analysis}\n\n"
-                f"🔗 <a href='{r['html_url']}'>TRUY CẬP GITHUB</a>\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
+                f"{formatted_analysis}\n\n"
+                f"🔗 <a href='{r['html_url']}'>XEM TRÊN GITHUB</a>"
             )
             
             send_telegram(msg)
