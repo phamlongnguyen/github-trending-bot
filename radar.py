@@ -32,79 +32,68 @@ def send_telegram(text):
     if not res.json().get("ok"):
         print(f"❌ Telegram Error: {res.text}")
 
-def analyze_repo(repo, model_name):
-    prompt = f"""
-    Phân tích chuyên sâu repo GitHub: {repo['full_name']}
-    Mô tả: {repo['description']}
-    Ngôn ngữ: {repo['language']}
-    
-    Trả về Tiếng Việt theo đúng 4 dòng sau:
-    CONG_DUNG: (Giải thích thực tế nó dùng để làm gì)
-    TAI_SAO_HOT: (Lý do đạt {repo['stargazers_count']} stars)
-    STARTUP_IDEA: (Ý tưởng kinh doanh dựa trên công nghệ này)
-    TOM_TAT: (Một câu ngắn gọn)
-    """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-    try:
-        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=25)
-        data = res.json()
-        if "candidates" in data:
-            content = data["candidates"][0]["content"]["parts"][0]["text"]
-            return content.replace("<", "&lt;").replace(">", "&gt;")
-        return "⚠️ AI không thể trích xuất dữ liệu."
-    except Exception as e:
-        return f"⚠️ Lỗi kết nối AI: {str(e)}"
-
 def run_radar(label="AUTO"):
-    # Lấy thời gian hiện tại (Định dạng: Thứ, Ngày/Tháng/Năm Giờ:Phút)
-    # Lưu ý: GitHub Actions dùng giờ UTC, muốn giờ VN thì cộng thêm 7 tiếng
     now = datetime.utcnow() + timedelta(hours=7)
     time_str = now.strftime("%d/%m/%Y %H:%M")
 
-    print(f"🚀 [{label}] [{time_str}] Đang quét GitHub AI...")
+    print(f"🚀 [{label}] Đang quét GitHub AI...")
     model_name = get_model()
     
     url = "https://api.github.com/search/repositories"
+    # Lấy 5 repo AI khủng nhất để tóm tắt thành 1 bản tin Daily Brief
     query = "stars:>20000 topic:ai pushed:>2024-01-01"
     
     try:
-        res = requests.get(url, params={"q": query, "sort": "stars", "per_page": 10}, timeout=15).json()
+        res = requests.get(url, params={"q": query, "sort": "stars", "per_page": 5}, timeout=15).json()
         repos = res.get("items", [])
         
         if not repos:
-            send_telegram(f"🕒 <code>{time_str}</code>\n<b>[{label}]</b> 😴 Không tìm thấy repo AI mới.")
+            send_telegram(f"🕒 <code>{time_str}</code>\n<b>[{label}]</b> Không thấy repo mới.")
             return
 
-        for i, r in enumerate(repos, 1):
-            analysis_raw = analyze_repo(r, model_name)
-            
-            lines = analysis_raw.split("\n")
-            formatted_analysis = ""
-            for line in lines:
-                line = line.strip()
-                if "CONG_DUNG:" in line: formatted_analysis += f"💡 <b>Công dụng:</b> {line.replace('CONG_DUNG:', '').strip()}\n"
-                elif "TAI_SAO_HOT:" in line: formatted_analysis += f"🔥 <b>Tại sao hot:</b> {line.replace('TAI_SAO_HOT:', '').strip()}\n"
-                elif "STARTUP_IDEA:" in line: formatted_analysis += f"🚀 <b>Startup Idea:</b> {line.replace('STARTUP_IDEA:', '').strip()}\n"
-                elif "TOM_TAT:" in line: formatted_analysis += f"📝 <b>Tóm tắt:</b> {line.replace('TOM_TAT:', '').strip()}\n"
+        # CHUẨN BỊ DỮ LIỆU GỬI AI TỔNG HỢP
+        repo_data_for_ai = ""
+        for r in repos:
+            repo_data_for_ai += f"- {r['full_name']} ({r['stargazers_count']} stars): {r['description']}\n"
 
-            if not formatted_analysis:
-                formatted_analysis = analysis_raw
+        prompt = f"""
+        Dựa trên danh sách các repo GitHub AI sau:
+        {repo_data_for_ai}
+        
+        Hãy viết một bản tin chuyên sâu theo đúng format sau (Tiếng Việt):
+        
+        ⚡ **AI Trend Hunter — Daily Brief**
+        
+        🔥 **TIÊU ĐIỂM**
+        (Viết 1 đoạn ngắn về xu hướng chung của các repo này, ví dụ: AI Agent, LLM hay Vibe Coding)
+        
+        🚀 **TOP GITHUB TRENDING**
+        (Liệt kê các repo theo format: • [Tên Repo] ⭐️ [Stars] — [Tóm tắt công dụng ngắn gọn])
+        
+        💡 **INSIGHT NGẮN**
+        (1 câu nhận định về giá trị cho Senior Dev hoặc Startup)
+        
+        📚 **Deep Dive — Full Tech Catalog**
+        (Phân tích chi tiết hơn 1-2 dòng cho mỗi repo về công nghệ sử dụng và Startup idea)
+        """
 
-            # Message định dạng mới có Ngày/Giờ ở đầu
-            msg = (
-                f"🕒 <code>{time_str}</code> | #{i} 🏆\n"
-                f"📂 <b>{r['name'].upper()}</b> [<code>{label}</code>]\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"⭐ Stars: <code>{r['stargazers_count']:,}</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{formatted_analysis}\n\n"
-                f"🔗 <a href='{r['html_url']}'>XEM TRÊN GITHUB</a>"
-            )
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        ai_res = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]}).json()
+        
+        if "candidates" in ai_res:
+            final_content = ai_res["candidates"][0]["content"]["parts"][0]["text"]
+            # Format lại các thẻ HTML cho chuẩn Telegram
+            final_content = final_content.replace("**", "<b>").replace("**", "</b>") # Nếu AI trả về Markdown
             
-            send_telegram(msg)
-            
+            # GỬI TIN NHẮN TỔNG HỢP
+            header = f"🕒 <code>{time_str}</code> | 🏷️ <code>{label}</code>\n\n"
+            send_telegram(header + final_content)
+            print("✅ Đã gửi bản tin Daily Brief thành công!")
+        else:
+            send_telegram("⚠️ AI không thể tổng hợp bản tin hôm nay.")
+
     except Exception as e:
-        send_telegram(f"❌ <b>Lỗi hệ thống:</b> <code>{str(e)}</code>")
+        send_telegram(f"❌ Lỗi: {str(e)}")
 
 if __name__ == "__main__":
     mode = "MANUAL" if len(sys.argv) > 1 and sys.argv[1] == "--manual" else "AUTO"
