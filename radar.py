@@ -33,44 +33,57 @@ def send_telegram(text):
         print(f"❌ Telegram Error: {res.text}")
 
 def run_radar(label="AUTO"):
-    print(f"🚀 [{label}] Đang quét GitHub AI & Claude...")
+    print(f"🚀 [{label}] Đang quét GitHub AI (>20k Stars)...")
     model_name = get_model()
     
     url = "https://api.github.com/search/repositories"
-    # Lấy repo liên quan đến Claude, AI và có hoạt động gần đây
-    # Query: 'claude' kết hợp với các topic AI
-    query = "claude AI topic:ai topic:machine-learning stars:>100"
+    # QUERY: Lọc cực mạnh > 20.000 stars, liên quan đến AI/Claude và mới cập nhật
+    last_month = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    query = f"stars:>20000 pushed:>{last_month} topic:ai"
     
     try:
-        # per_page=10 để lấy đúng 10 repo
+        # Lấy 10 repo khủng nhất
         res = requests.get(url, params={"q": query, "sort": "stars", "per_page": 10}, timeout=15).json()
         repos = res.get("items", [])
         
         if not repos:
-            send_telegram(f"<b>[{label}]</b> 😴 Không tìm thấy repo Claude/AI nào mới.")
+            send_telegram(f"<b>[{label}]</b> 😴 Không tìm thấy repo AI nào > 20k stars mới cập nhật.")
             return
 
         for i, r in enumerate(repos, 1):
-            prompt = f"Tóm tắt repo GitHub: {r['full_name']}. Mô tả: {r['description']}. Viết ngắn gọn 3 dòng: Công dụng, Điểm nổi bật, Cách dùng. Tiếng Việt."
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            # Prompt yêu cầu phân tích sâu hơn
+            prompt = f"""
+            Hãy phân tích repo GitHub này: {r['full_name']}
+            Mô tả gốc: {r['description']}
             
+            Yêu cầu trả về bằng Tiếng Việt, định dạng HTML:
+            1. 'Công dụng thực tế': Repo này dùng để làm gì trong thực tế? (Phân tích sâu)
+            2. 'Tại sao hot': Tại sao nó đạt hơn 20k stars?
+            3. 'Startup Idea': Một ý tưởng kinh doanh từ repo này.
+            4. 'Tóm tắt 1 câu': Ngắn gọn nhất có thể.
+            """
+            
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             ai_res = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]}).json()
             
             if "candidates" in ai_res:
                 analysis = ai_res["candidates"][0]["content"]["parts"][0]["text"]
-                analysis = analysis.replace("<", "&lt;").replace(">", "&gt;").strip()
+                # Xử lý bảo mật HTML cơ bản
+                analysis = analysis.replace("<br>", "\n").replace("<b>", "<b>").replace("</b>", "</b>")
             else:
-                analysis = "<i>(AI không thể phân tích nội dung này)</i>"
+                analysis = "<i>(AI gặp lỗi khi phân tích sâu repo này)</i>"
 
-            # ĐỊNH DẠNG TIN NHẮN MỚI: Phân biệt rõ Title, Label và Body
+            # Định dạng tin nhắn gửi đi
             msg = (
-                f"#{i} | <b>{r['name'].upper()}</b> 🏷️ <code>{label}</code>\n"
-                f"───────────────────\n"
-                f"⭐ <b>Stars:</b> {r['stargazers_count']}\n"
-                f"📝 <b>Mô tả:</b> <i>{r['description']}</i>\n\n"
-                f"🤖 <b>AI Phân tích:</b>\n{analysis}\n\n"
-                f"🔗 <a href='{r['html_url']}'>Xem dự án trên GitHub</a>\n"
-                f"───────────────────"
+                f"🏆 <b>TOP AI REPO #{i}</b> 🏷️ <code>{label}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔥 <b>Tên:</b> {r['name'].upper()}\n"
+                f"⭐ <b>Stars:</b> <code>{r['stargazers_count']:,}</code>\n"
+                f"🌐 <b>Ngôn ngữ:</b> {r['language'] or 'N/A'}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{analysis}\n\n"
+                f"🔗 <a href='{r['html_url']}'>TRUY CẬP GITHUB</a>\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
             )
             
             send_telegram(msg)
