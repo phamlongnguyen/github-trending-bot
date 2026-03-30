@@ -38,15 +38,19 @@ def get_repos():
         "q": query,
         "sort": "stars",
         "order": "desc",
-        "per_page": 20
+        "per_page": 10
     }
 
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}"
     }
 
-    res = requests.get(url, headers=headers, params=params, timeout=10)
-    data = res.json()
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=10)
+        data = res.json()
+    except Exception as e:
+        print("❌ GitHub API error:", e)
+        return []
 
     repos = []
     for item in data.get("items", []):
@@ -72,30 +76,41 @@ Description: {repo['desc']}
 Return:
 - What it does
 - Why it's trending
-- Startup angle (realistic)
+- Startup idea
 - Verdict (short)
 """
 
-    res = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
-        },
-        timeout=15
-    )
+    try:
+        res = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7
+            },
+            timeout=15
+        )
 
-    return res.json()["choices"][0]["message"]["content"]
+        data = res.json()
+        print("DEBUG OpenAI:", data)
+
+        if "choices" not in data:
+            return f"⚠️ AI error: {data.get('error', 'unknown')}"
+
+        return data["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        print("❌ OpenAI request failed:", e)
+        return "⚠️ AI request failed"
 
 
 # ---------------- BUILD MSG ----------------
 def build_msg(repos):
-    msg = "🚀 *30K+ GitHub Radar (10 repos/day)*\n\n"
+    msg = "🚀 *30K+ GitHub Radar*\n\n"
 
     for r in repos:
         ai = analyze(r)
@@ -104,43 +119,55 @@ def build_msg(repos):
         msg += f"{ai}\n"
         msg += f"{r['url']}\n\n"
 
+    if not msg.strip():
+        msg = "⚠️ Empty message fallback"
+
     return msg
 
 
 # ---------------- TELEGRAM ----------------
 def send_telegram(text):
+    if not text.strip():
+        text = "⚠️ Empty message"
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    requests.post(url, data={
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }, timeout=10)
+    try:
+        res = requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "parse_mode": "Markdown"
+        }, timeout=10)
+
+        print("Telegram response:", res.text)
+
+    except Exception as e:
+        print("❌ Telegram error:", e)
 
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    sent = load_sent()
+    print("🚀 Radar bot starting...")
 
+    sent = load_sent()
     repos = get_repos()
 
-    # lọc repo mới
+    if not repos:
+        send_telegram("❌ No repos fetched")
+        exit()
+
     new_repos = [r for r in repos if r["name"] not in sent]
-
-    # sort theo stars
-    new_repos = sorted(new_repos, key=lambda x: x["stars"], reverse=True)
-
-    # lấy tối đa 10 repo
-    new_repos = new_repos[:10]
 
     if not new_repos:
         send_telegram("😴 No new repos today")
-    else:
-        msg = build_msg(new_repos)
-        send_telegram(msg)
+        exit()
 
-        # update state
-        for r in new_repos:
-            sent.add(r["name"])
+    msg = build_msg(new_repos)
+    send_telegram(msg)
 
-        save_sent(sent)
+    for r in new_repos:
+        sent.add(r["name"])
+
+    save_sent(sent)
+
+    print("✅ Done!")
