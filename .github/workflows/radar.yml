@@ -1,8 +1,8 @@
-name: 30K Radar Bot
+name: AI Trend Bot
 
 on:
   schedule:
-    - cron: "0 14 * * *"  # 21:00 VN
+    - cron: "0 2 * * *" # 9h VN
   workflow_dispatch:
 
 jobs:
@@ -12,25 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: 20
 
-      - run: pip install -r requirements.txt
-
-      - run: python radar.py
+      - run: npm install
+      - run: node index.js
         env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          
-
-      - name: Commit state
-        run: |
-          git config user.name "bot"
-          git config user.email "bot@example.com"
-          git add sent.json
-          git commit -m "update sent repos" || echo "no changes"
-          git push
