@@ -2,7 +2,7 @@ name: Tech Morning Brief Bot
 
 on:
   schedule:
-    - cron: "0 2 * * *"  # 09:00 VN (UTC+7)
+    - cron: "08 09 * * *"  # 09:00 VN (UTC+7)
   workflow_dispatch:
 
 jobs:
