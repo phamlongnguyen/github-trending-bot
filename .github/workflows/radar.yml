@@ -2,7 +2,7 @@ name: AI Trend Bot
 
 on:
   schedule:
-     - cron: "0 8 * * *" # 14:55 VN (07:55 UTC)
+     - cron: "05 8 * * *" # 14:55 VN (07:55 UTC)
   workflow_dispatch:
 
 jobs:
