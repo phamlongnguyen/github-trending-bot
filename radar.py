@@ -2,119 +2,86 @@ import requests
 import os
 from datetime import datetime, timedelta
 
-# ENV - Thiết lập trên GitHub Secrets hoặc file .env
+# ENV
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# ---------------- FETCH (Quét Công nghệ AI) ----------------
+# ---------------- FETCH AI REPOS ----------------
 def get_ai_repos():
     url = "https://api.github.com/search/repositories"
-    
-    # Lấy các repo có cập nhật (pushed) trong 7 ngày qua
     last_week = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-    
-    # Query: Tìm theo topic AI, stars trên 500 để đảm bảo chất lượng
     query = f"topic:ai topic:machine-learning stars:>500 pushed:>{last_week}"
-
-    params = {
-        "q": query,
-        "sort": "stars",
-        "order": "desc",
-        "per_page": 5  # Lấy 5 con hot nhất mỗi lần chạy
-    }
-
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}" if GITHUB_TOKEN else "",
-        "Accept": "application/vnd.github.v3+json"
-    }
+    
+    params = {"q": query, "sort": "stars", "order": "desc", "per_page": 5}
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}" if GITHUB_TOKEN else ""}
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=15)
-        data = res.json()
-        if "items" not in data:
-            print(f"❌ GitHub API Error: {data.get('message')}")
-            return []
-        return data.get("items", [])
-    except Exception as e:
-        print(f"❌ GitHub Request Failed: {e}")
+        return res.json().get("items", [])
+    except:
         return []
 
-# ---------------- AI (Phân tích bằng Gemini v1) ----------------
+# ---------------- AI ANALYSIS (FIXED URL) ----------------
 def analyze_with_gemini(repo):
-    prompt = f"""
-Bạn là một chuyên gia AI cao cấp. Hãy tóm tắt Repo sau bằng Tiếng Việt:
-Tên: {repo['full_name']}
-Stars: {repo['stargazers_count']}
-Mô tả: {repo['description']}
+    prompt = f"Tóm tắt repo AI này bằng Tiếng Việt: {repo['full_name']}. Mô tả: {repo['description']}. Yêu cầu: Công dụng, Điểm nổi bật, Ý tưởng Startup."
 
-Yêu cầu (ngắn gọn, xuống dòng hợp lý):
-- 💡 Công dụng: 
-- 🔥 Điểm nổi bật công nghệ:
-- 🚀 Ý tưởng Startup:
-- ⚡ Đánh giá nhanh:
-"""
-
-    # Sử dụng phiên bản v1 ổn định để tránh lỗi 404
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # FIX: Cập nhật URL v1beta với model name đầy đủ - Đây là bản ổn định nhất cho Flash hiện tại
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
     try:
         res = requests.post(url, json=payload, timeout=20)
         data = res.json()
         
         if "candidates" in data:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            return data["candidates"][0]["content"]["parts"][0]["text"], None
         else:
-            print(f"❌ Gemini API Error: {data}")
-            return "⚠️ AI không phản hồi nội dung."
+            # Trả về nội dung lỗi để gửi Telegram
+            return None, data.get("error", {}).get("message", str(data))
     except Exception as e:
-        print(f"❌ Gemini Request Failed: {e}")
-        return "⚠️ Lỗi kết nối AI."
+        return None, str(e)
+
+# ---------------- TELEGRAM ----------------
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    print("🤖 AI GitHub Radar is starting (No-Duplicate-Logic Disabled)...")
-
-    if not GEMINI_API_KEY:
-        print("❌ Lỗi: Thiếu GEMINI_API_KEY!")
-        exit()
-
-    # Lấy danh sách repo
+    print("🤖 AI GitHub Radar is starting...")
+    
     repos = get_ai_repos()
-
     if not repos:
-        print("😴 Không có repo AI nào mới đạt tiêu chuẩn hôm nay.")
+        send_telegram("❌ Bot không lấy được dữ liệu từ GitHub.")
         exit()
 
-    print(f" tìm thấy {len(repos)} repo hot. Đang phân tích...")
+    errors = []
+    success_count = 0
 
     for r in repos:
-        analysis = analyze_with_gemini(r)
+        analysis, err = analyze_with_gemini(r)
         
-        # Xây dựng tin nhắn Telegram
+        if err:
+            errors.append(f"Repo *{r['full_name']}*: {err}")
+            continue
+
+        # Gửi tin nhắn thành công
         msg = (
             f"🌟 *AI TRENDING RADAR* 🌟\n\n"
             f"📦 *{r['full_name']}* ({r['stargazers_count']}⭐)\n"
             f"{analysis}\n"
             f"🔗 [Link GitHub]({r['html_url']})"
         )
+        send_telegram(msg)
+        success_count += 1
 
-        # Gửi tới Telegram
-        try:
-            tel_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(tel_url, data={
-                "chat_id": CHAT_ID,
-                "text": msg,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": False
-            }, timeout=10)
-            print(f"✅ Đã gửi: {r['full_name']}")
-        except Exception as e:
-            print(f"❌ Telegram error: {e}")
+    # Nếu có lỗi, gom lại gửi 1 bản tin tổng hợp lỗi
+    if errors:
+        error_report = "⚠️ *BÁO CÁO LỖI AI*\n\n" + "\n".join(errors)
+        send_telegram(error_report)
+        print("❌ Đã gửi báo cáo lỗi về Telegram.")
 
-    print("🏁 Xong! Kiểm tra điện thoại của bạn.")
+    print(f"✅ Xong! Thành công: {success_count}, Thất bại: {len(errors)}")
