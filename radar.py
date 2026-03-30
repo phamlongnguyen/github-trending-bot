@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Đổi tên biến môi trường cho đúng mục đích
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 STATE_FILE = "sent.json"
-
 
 # ---------------- STATE ----------------
 def load_sent():
@@ -20,18 +20,16 @@ def load_sent():
     except:
         return set()
 
-
 def save_sent(data):
     with open(STATE_FILE, "w") as f:
         json.dump(list(data), f)
 
-
 # ---------------- FETCH ----------------
 def get_repos():
     url = "https://api.github.com/search/repositories"
-
     last_week = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-
+    
+    # Query: Star > 30k và có push trong tuần qua
     query = f"stars:>30000 pushed:>{last_week}"
 
     params = {
@@ -42,132 +40,118 @@ def get_repos():
     }
 
     headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}"
+        "Authorization": f"Bearer {GITHUB_TOKEN}" if GITHUB_TOKEN else ""
     }
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=10)
         data = res.json()
+        return data.get("items", [])
     except Exception as e:
         print("❌ GitHub API error:", e)
         return []
 
-    repos = []
-    for item in data.get("items", []):
-        repos.append({
-            "name": item["full_name"],
-            "desc": item["description"] or "",
-            "stars": item["stargazers_count"],
-            "url": item["html_url"]
-        })
-
-    return repos
-
-
-# ---------------- AI ----------------
+# ---------------- AI (GEMINI REPLACEMENT) ----------------
 def analyze(repo):
     prompt = f"""
-You are a startup analyst.
+Bạn là một chuyên gia phân tích Startup. Hãy phân tích Repo sau:
+Repo: {repo['full_name']}
+Stars: {repo['stargazers_count']}
+Mô tả: {repo['description']}
 
-Repo: {repo['name']}
-Stars: {repo['stars']}
-Description: {repo['desc']}
-
-Return:
-- What it does
-- Why it's trending
-- Startup idea
-- Verdict (short)
+Yêu cầu trả về ngắn gọn:
+- Nó làm gì?
+- Tại sao nó trending?
+- Ý tưởng Startup từ repo này?
+- Đánh giá nhanh (Verdict).
 """
 
+    # URL API của Gemini (Dùng model flash cho nhanh và miễn phí)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
     try:
-        res = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7
-            },
-            timeout=15
-        )
-
+        res = requests.post(url, headers=headers, json=payload, timeout=15)
         data = res.json()
-        print("DEBUG OpenAI:", data)
 
-        if "choices" not in data:
-            return f"⚠️ AI error: {data.get('error', 'unknown')}"
+        # Kiểm tra lỗi từ Google API
+        if "candidates" not in data:
+            print("DEBUG Gemini Error:", data)
+            return "⚠️ Gemini AI error"
 
-        return data["choices"][0]["message"]["content"]
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
     except Exception as e:
-        print("❌ OpenAI request failed:", e)
+        print(f"❌ Gemini request failed for {repo['full_name']}:", e)
         return "⚠️ AI request failed"
-
 
 # ---------------- BUILD MSG ----------------
 def build_msg(repos):
-    msg = "🚀 *30K+ GitHub Radar*\n\n"
+    msg = "🚀 *30K+ GitHub Radar (Powered by Gemini)*\n\n"
 
     for r in repos:
-        ai = analyze(r)
-
-        msg += f"🔥 *{r['name']}* ({r['stars']}⭐)\n"
-        msg += f"{ai}\n"
-        msg += f"{r['url']}\n\n"
-
-    if not msg.strip():
-        msg = "⚠️ Empty message fallback"
+        ai_analysis = analyze(r)
+        
+        msg += f"🔥 *{r['full_name']}* ({r['stargazers_count']}⭐)\n"
+        msg += f"{ai_analysis}\n"
+        msg += f"🔗 {r['html_url']}\n"
+        msg += "---------------------------\n\n"
 
     return msg
-
 
 # ---------------- TELEGRAM ----------------
 def send_telegram(text):
     if not text.strip():
-        text = "⚠️ Empty message"
+        return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
+    
+    # Chia nhỏ tin nhắn nếu quá dài (Telegram giới hạn 4096 ký tự)
     try:
         res = requests.post(url, data={
             "chat_id": CHAT_ID,
             "text": text,
             "parse_mode": "Markdown"
         }, timeout=10)
-
-        print("Telegram response:", res.text)
-
+        print("Telegram status:", res.status_code)
     except Exception as e:
         print("❌ Telegram error:", e)
 
-
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    print("🚀 Radar bot starting...")
+    print("🚀 Radar bot starting with Gemini...")
+
+    if not GEMINI_API_KEY:
+        print("❌ Lỗi: Thiếu GEMINI_API_KEY trong môi trường!")
+        exit()
 
     sent = load_sent()
     repos = get_repos()
 
     if not repos:
-        send_telegram("❌ No repos fetched")
+        print("😴 No repos found.")
         exit()
 
-    new_repos = [r for r in repos if r["name"] not in sent]
+    # Lọc repo mới
+    new_repos = [r for r in repos if r["full_name"] not in sent]
 
     if not new_repos:
-        send_telegram("😴 No new repos today")
+        print("😴 No new repos today.")
         exit()
 
-    msg = build_msg(new_repos)
-    send_telegram(msg)
+    # Xử lý từng cụm (nên giới hạn để tránh spam Telegram)
+    final_msg = build_msg(new_repos[:3]) # Lấy 3 cái mới nhất để tránh quá dài
+    send_telegram(final_msg)
 
+    # Lưu lại những cái đã gửi
     for r in new_repos:
-        sent.add(r["name"])
-
+        sent.add(r["full_name"])
     save_sent(sent)
 
     print("✅ Done!")
